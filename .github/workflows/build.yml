@@ -25,7 +25,7 @@ jobs:
         msbuild ChxlLauncher.sln /p:Configuration=Release /p:Platform=x64
 
     - name: Upload Executable Artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ChxlLauncher-Release
         path: x64/Release/ChxlLauncher.exe
