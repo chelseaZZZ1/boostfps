@@ -21,10 +21,11 @@ if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
 Write-Host "[+] Checking dependencies..." -ForegroundColor Cyan
 python -m pip install pywebview --quiet --disable-pip-version-check
 
-# 3. โหลด main.py จาก GitHub มาประมวลผลบน RAM (Memory) โดยตรง
+# 3. โหลด main.py เข้า RAM และแปลง Encoding เป็น UTF-8 รันผ่าน Standard Input (แก้ไข SyntaxError)
 Write-Host "[+] Fetching application code into RAM..." -ForegroundColor Green
-$pythonCode = (New-Object System.Net.WebClient).DownloadString('https://raw.githubusercontent.com/chelseaZZZ1/boostfps/main/main.py')
+$webClient = New-Object System.Net.WebClient
+$webClient.Encoding = [System.Text.Encoding]::UTF8
+$pythonCode =$webClient.DownloadString('https://raw.githubusercontent.com/chelseaZZZ1/boostfps/main/main.py')
 
-# 4. ส่งผ่านโค้ดเข้าไปรันใน Python Process ทันที (ไม่เขียนลงดิสก์)
-Write-Host "[🚀] Launching FiveM Ultra FPS Booster..." -ForegroundColor Quantum
-python -c "$pythonCode"
+Write-Host "[🚀] Launching FiveM Ultra FPS Booster..." -ForegroundColor Cyan
+$pythonCode | python -
