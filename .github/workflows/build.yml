@@ -1,0 +1,31 @@
+name: Build Chxl Launcher
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Add MSBuild to PATH
+      uses: microsoft/setup-msbuild@v1.1
+
+    - name: Install Dependencies (vcpkg)
+      run: |
+        vcpkg install imgui[directx11-binding,win32-binding]:x64-windows nlohmann-json:x64-windows curl:x64-windows
+
+    - name: Build Solution
+      run: |
+        msbuild ChxlLauncher.sln /p:Configuration=Release /p:Platform=x64
+
+    - name: Upload Executable Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: ChxlLauncher-Release
+        path: x64/Release/ChxlLauncher.exe
