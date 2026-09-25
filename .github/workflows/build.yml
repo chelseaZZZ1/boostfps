@@ -17,13 +17,13 @@ jobs:
       run: |
         vcpkg integrate install
 
-    - name: Install Dependencies (vcpkg)
+    - name: Install Dependencies (vcpkg Static)
       run: |
-        vcpkg install imgui[dx11-binding,win32-binding]:x64-windows nlohmann-json:x64-windows curl:x64-windows
+        vcpkg install imgui[dx11-binding,win32-binding]:x64-windows-static nlohmann-json:x64-windows-static curl:x64-windows-static
 
     - name: Configure CMake
       run: |
-        cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -A x64
+        cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows-static -A x64
 
     - name: Build
       run: |
