@@ -13,23 +13,23 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Add MSBuild to PATH
-      uses: microsoft/setup-msbuild@v2
-
     - name: Integrate vcpkg
       run: |
         vcpkg integrate install
 
     - name: Install Dependencies (vcpkg)
       run: |
-        vcpkg install imgui[dx11-binding,win32-binding,docking-experimental]:x64-windows nlohmann-json:x64-windows curl:x64-windows
+        vcpkg install imgui[dx11-binding,win32-binding]:x64-windows nlohmann-json:x64-windows curl:x64-windows
 
-    - name: Build Solution
+    - name: Setup Developer Command Prompt
+      uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Compile C++ Direct
       run: |
-        msbuild ChxlLauncher.sln /p:Configuration=Release /p:Platform=x64 /p:VcpkgEnableManifest=false
+        cl /EHsc /O2 main.cpp /I C:/vcpkg/installed/x64-windows/include /link /LIBPATH:C:/vcpkg/installed/x64-windows/lib imgui.lib d3d11.lib libcurl.lib User32.lib Shell32.lib /OUT:ChxlLauncher.exe
 
     - name: Upload Executable Artifact
       uses: actions/upload-artifact@v4
       with:
         name: ChxlLauncher-Release
-        path: x64/Release/ChxlLauncher.exe
+        path: ChxlLauncher.exe
