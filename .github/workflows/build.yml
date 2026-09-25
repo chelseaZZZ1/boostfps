@@ -14,15 +14,19 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Add MSBuild to PATH
-      uses: microsoft/setup-msbuild@v1.1
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Integrate vcpkg
+      run: |
+        vcpkg integrate install
 
     - name: Install Dependencies (vcpkg)
       run: |
-        vcpkg install imgui[directx11-binding,win32-binding]:x64-windows nlohmann-json:x64-windows curl:x64-windows
+        vcpkg install imgui[dx11-binding,win32-binding,docking-experimental]:x64-windows nlohmann-json:x64-windows curl:x64-windows
 
     - name: Build Solution
       run: |
-        msbuild ChxlLauncher.sln /p:Configuration=Release /p:Platform=x64
+        msbuild ChxlLauncher.sln /p:Configuration=Release /p:Platform=x64 /p:VcpkgEnableManifest=false
 
     - name: Upload Executable Artifact
       uses: actions/upload-artifact@v4
