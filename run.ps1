@@ -1,9 +1,7 @@
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-# -------------------------------------------------------------
 # 1. เช็คสิทธิ์ Admin
-# -------------------------------------------------------------
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -11,9 +9,7 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
     exit
 }
 
-# -------------------------------------------------------------
 # 2. ฟังก์ชั่น Boost FPS & Clear Cache
-# -------------------------------------------------------------
 function Start-Boost {
     $cleared = 0
     $fivemCache = "$env:LOCALAPPDATA\FiveM\FiveM.app\data"
@@ -27,16 +23,13 @@ function Start-Boost {
         }
     }
     
-    # ปิด GameDVR ของ Windows
     Set-ItemProperty -Path "HKCU:\System\GameConfigStore" -Name "GameDVR_Enabled" -Value 0 -ErrorAction SilentlyContinue
     Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR" -Name "AllowGameDVR" -Value 0 -ErrorAction SilentlyContinue
 
-    return "⚡ Cleaned $cleared FiveM cache folders & Disabled GameDVR!"
+    return "Cleaned $cleared FiveM cache folders and Disabled GameDVR!"
 }
 
-# -------------------------------------------------------------
 # 3. ฟังก์ชั่น Lock High Priority
-# -------------------------------------------------------------
 function Start-PriorityLock {
     $cmd = {
         while ($true) {
@@ -47,12 +40,10 @@ function Start-PriorityLock {
         }
     }
     [scriptblock]::Create($cmd).BeginInvoke()
-    return "🔥 Process Priority Lock Activated (High Priority)!"
+    return "Process Priority Lock Activated (High Priority)!"
 }
 
-# -------------------------------------------------------------
-# 4. สร้าง GUI ด้วย GUI Form ในตัว Windows (สไตล์ Dark Cyberpunk)
-# -------------------------------------------------------------
+# 4. สร้าง GUI
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "FiveM Ultra FPS Booster"
 $form.Size = New-Object System.Drawing.Size(460, 520)$form.StartPosition = "CenterScreen"
@@ -60,7 +51,7 @@ $form.BackColor = [System.Drawing.ColorTranslator]::FromHtml("#090a0f")
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox =$false
 
-# Banner Image (พร้อมกันภาพ undefined ด้วย Fallback)
+# Banner Image
 $pictureBox = New-Object System.Windows.Forms.PictureBox
 $pictureBox.Size = New-Object System.Drawing.Size(400, 130)
 $pictureBox.Location = New-Object System.Drawing.Point(22, 20)$pictureBox.SizeMode = "StretchImage"
@@ -70,7 +61,6 @@ try {
     $resp =$req.GetResponse()
     $pictureBox.Image = [System.Drawing.Image]::FromStream($resp.GetResponseStream())
 } catch {
-    # ถ้าโหลดภาพไม่ได้ จะสร้างภาพพื้นหลังสีเข้มแทน ไม่ขึ้น undefined แน่นอน
     $bmp = New-Object System.Drawing.Bitmap(400, 130)$g = [System.Drawing.Graphics]::FromImage($bmp)$g.Clear([System.Drawing.ColorTranslator]::FromHtml("#10121b"))
     $font = New-Object System.Drawing.Font("Arial", 16, [System.Drawing.FontStyle]::Bold)
     $brush = New-Object System.Drawing.SolidBrush([System.Drawing.ColorTranslator]::FromHtml("#00f0ff"))
@@ -79,7 +69,7 @@ try {
 }
 $form.Controls.Add($pictureBox)
 
-# Title Label
+# Title
 $title = New-Object System.Windows.Forms.Label
 $title.Text = "FIVEM FPS BOOST VIP"
 $title.Font = New-Object System.Drawing.Font("Arial", 14, [System.Drawing.FontStyle]::Bold)
@@ -88,7 +78,7 @@ $title.Size = New-Object System.Drawing.Size(400, 30)
 $title.Location = New-Object System.Drawing.Point(22, 165)$title.TextAlign = "MiddleCenter"
 $form.Controls.Add($title)
 
-# Console Output Box
+# Console Output
 $console = New-Object System.Windows.Forms.TextBox
 $console.Multiline = $true$console.ReadOnly = $true$console.Size = New-Object System.Drawing.Size(400, 90)
 $console.Location = New-Object System.Drawing.Point(22, 360)$console.BackColor = [System.Drawing.ColorTranslator]::FromHtml("#050608")
@@ -97,9 +87,9 @@ $console.Font = New-Object System.Drawing.Font("Consolas", 9)
 $console.Text = "> Ready to boost your FiveM..."
 $form.Controls.Add($console)
 
-# Button 1: Boost FPS
+# Buttons
 $btnBoost = New-Object System.Windows.Forms.Button
-$btnBoost.Text = "⚡ BOOST FPS & CLEAR CACHE"
+$btnBoost.Text = "BOOST FPS AND CLEAR CACHE"
 $btnBoost.Size = New-Object System.Drawing.Size(400, 45)
 $btnBoost.Location = New-Object System.Drawing.Point(22, 210)$btnBoost.FlatStyle = "Flat"
 $btnBoost.BackColor = [System.Drawing.ColorTranslator]::FromHtml("#7000ff")
@@ -110,9 +100,8 @@ $btnBoost.Add_Click({$console.Text = "> Running FPS Boost..."
 })
 $form.Controls.Add($btnBoost)
 
-# Button 2: Lock Priority
 $btnPriority = New-Object System.Windows.Forms.Button
-$btnPriority.Text = "🔒 LOCK PROCESS PRIORITY (HIGH)"
+$btnPriority.Text = "LOCK PROCESS PRIORITY (HIGH)"
 $btnPriority.Size = New-Object System.Drawing.Size(400, 45)
 $btnPriority.Location = New-Object System.Drawing.Point(22, 270)$btnPriority.FlatStyle = "Flat"
 $btnPriority.BackColor = [System.Drawing.ColorTranslator]::FromHtml("#ff0055")
@@ -123,5 +112,4 @@ $btnPriority.Add_Click({$console.Text = "> Activating Priority Lock..."
 })
 $form.Controls.Add($btnPriority)
 
-# Show Window
 [System.Windows.Forms.Application]::Run($form)
