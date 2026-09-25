@@ -21,15 +21,16 @@ jobs:
       run: |
         vcpkg install imgui[dx11-binding,win32-binding]:x64-windows nlohmann-json:x64-windows curl:x64-windows
 
-    - name: Setup Developer Command Prompt
-      uses: ilammy/msvc-dev-cmd@v1
-
-    - name: Compile C++ Direct
+    - name: Configure CMake
       run: |
-        cl /EHsc /O2 main.cpp /I C:/vcpkg/installed/x64-windows/include /link /LIBPATH:C:/vcpkg/installed/x64-windows/lib imgui.lib d3d11.lib libcurl.lib User32.lib Shell32.lib /OUT:ChxlLauncher.exe
+        cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -A x64
+
+    - name: Build
+      run: |
+        cmake --build build --config Release
 
     - name: Upload Executable Artifact
       uses: actions/upload-artifact@v4
       with:
         name: ChxlLauncher-Release
-        path: ChxlLauncher.exe
+        path: build/Release/ChxlLauncher.exe
