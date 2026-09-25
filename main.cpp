@@ -20,7 +20,7 @@
 
 using json = nlohmann::json;
 
-// Global Direct3D Variables
+// Direct3D Variables
 static ID3D11Device*            g_pd3dDevice = nullptr;
 static ID3D11DeviceContext*      g_pd3dDeviceContext = nullptr;
 static IDXGISwapChain*          g_pSwapChain = nullptr;
@@ -30,7 +30,7 @@ static ID3D11RenderTargetView*  g_mainRenderTargetView = nullptr;
 const std::string SUPABASE_URL = "https://ntaroifjesdztquwkzvt.supabase.co";
 const std::string SUPABASE_KEY = "sb_publishable_YIrrmqPLB610TCjSz31T3w_IG5iKOoO";
 
-// App States
+// Application State
 bool g_IsAuthenticated = false;
 std::string g_LicenseKey = "";
 std::string g_KeyStatus = "Awaiting Key Verification...";
@@ -39,14 +39,14 @@ int g_ActiveAccounts = 0;
 bool g_AntiAFK = true;
 bool g_LowNetMode = false;
 
-// Forward declarations
+// Forward Declarations
 bool CreateDeviceD3D(HWND hWnd);
 void CleanupDeviceD3D();
 void CreateRenderTarget();
 void CleanupRenderTarget();
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-// Helper: Get ProgramData Path
+// Get ProgramData Path
 std::string GetProgramDataPath() {
     char path[MAX_PATH];
     if (SUCCEEDED(SHGetFolderPathA(NULL, CSIDL_COMMON_APPDATA, NULL, 0, path))) {
@@ -57,72 +57,74 @@ std::string GetProgramDataPath() {
     return "C:\\ChxlLauncher_license.lic";
 }
 
-// Curl Write Callback
+// Curl Callback
 static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
     ((std::string*)userp)->append((char*)contents, size * nmemb);
     return size * nmemb;
 }
 
-// Supabase Key Validation Logic
+// Verify & Activate Key via Supabase RPC
 bool VerifyAndActivateKey(const std::string& key) {
     CURL* curl = curl_easy_init();
     if (!curl) return false;
 
     std::string readBuffer;
-    std::string url = SUPABASE_URL + "/keys?key=eq." + key;
+    std::string url = SUPABASE_URL + "/rest/v1/rpc/check_and_activate_key";
     
+    json payload;
+    payload["user_key"] = key;
+    std::string jsonStr = payload.dump();
+
     struct curl_slist* headers = NULL;
     headers = curl_slist_append(headers, ("apikey: " + SUPABASE_KEY).c_str());
     headers = curl_slist_append(headers, ("Authorization: Bearer " + SUPABASE_KEY).c_str());
+    headers = curl_slist_append(headers, "Content-Type: application/json");
     
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, jsonStr.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
 
     CURLcode res = curl_easy_perform(curl);
     curl_easy_cleanup(curl);
+    curl_slist_free_all(headers);
 
     if (res == CURLE_OK && !readBuffer.empty()) {
         try {
-            auto data = json::parse(readBuffer);
-            if (!data.empty()) {
-                auto keyData = data[0];
-                bool isUsed = keyData["is_used"].get<bool>();
-                std::string plan = keyData["plan"].get<std::string>(); // "7_day", "31_day", "lifetime"
+            auto resJson = json::parse(readBuffer);
+            if (resJson.contains("valid") && resJson["valid"].get<bool>()) {
+                std::string plan = resJson.value("plan", "unknown");
+                std::string msg = resJson.value("message", "Active");
 
-                // First time activation logic
-                if (!isUsed) {
-                    // Update key as used + set activated_at in Supabase via PATCH
-                    // ( Implementation depends on your Supabase table schema )
-                }
-
-                // Save locally
                 std::ofstream outfile(GetProgramDataPath());
                 outfile << key;
                 outfile.close();
 
-                g_KeyStatus = "Key Valid! Plan: " + plan;
+                g_KeyStatus = "Status: " + msg + " (" + plan + ")";
                 return true;
+            } else {
+                g_KeyStatus = resJson.value("message", "Invalid Key!");
             }
         } catch (...) {
-            g_KeyStatus = "Invalid Response / Parsing Error";
+            g_KeyStatus = "Error parsing response from Supabase";
         }
+    } else {
+        g_KeyStatus = "Connection Error to Supabase";
     }
-    g_KeyStatus = "Invalid Key!";
     return false;
 }
 
-// Roblox Multi-Instance Unlocker
+// Multi-Instance Unlocker
 void UnlockRobloxMultiInstance() {
     CreateMutexA(NULL, TRUE, "ROBLOX_singletonMutex");
 }
 
-// Anti-AFK Thread Function
+// Anti-AFK Worker Thread
 void AntiAFKWorker() {
     while (true) {
         if (g_AntiAFK) {
-            // Find Roblox Windows & Send Keypress
             HWND hwnd = FindWindowA(NULL, "Roblox");
             if (hwnd) {
                 SendMessage(hwnd, WM_KEYDOWN, VK_SPACE, 0);
@@ -134,29 +136,22 @@ void AntiAFKWorker() {
     }
 }
 
-// Potassium Executor Sync (IPC Named Pipe Example)
+// Potassium Executor Sync
 void SyncWithPotassium(const std::string& script) {
     HANDLE hPipe = CreateFileA("\\\\.\\pipe\\PotassiumPipe", GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
     if (hPipe != INVALID_HANDLE_VALUE) {
         DWORD bytesWritten;
-        WriteFile(hPipe, script.c_str(), script.length(), &bytesWritten, NULL);
+        WriteFile(hPipe, script.c_str(), (DWORD)script.length(), &bytesWritten, NULL);
         CloseHandle(hPipe);
     }
 }
 
-// Custom Smooth UI Helpers
-float Lerp(float a, float b, float t) { return a + t * (b - a); }
-
-// WinMain Entry Point
+// Main Entry Point
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
-    // Enable Multi-Instance Roblox
     UnlockRobloxMultiInstance();
-
-    // Start Anti-AFK
     std::thread(AntiAFKWorker).detach();
 
-    // Create Application Window
     WNDCLASSEXW wc = { sizeof(WNDCLASSEXW), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, L"ChxlLauncherClass", NULL };
     ::RegisterClassExW(&wc);
     HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"Chxl Launcher Pro", WS_POPUP | WS_VISIBLE, 100, 100, 960, 580, NULL, NULL, wc.hInstance, NULL);
@@ -170,12 +165,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     ::ShowWindow(hwnd, SW_SHOWDEFAULT);
     ::UpdateWindow(hwnd);
 
-    // Setup ImGui Context
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO(); (void)io;
     
-    // Smooth Dark Styling
     ImGui::StyleColorsDark();
     ImGuiStyle& style = ImGui::GetStyle();
     style.WindowRounding = 12.0f;
@@ -185,7 +178,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     style.GrabRounding = 6.0f;
     style.WindowBorderSize = 0.0f;
 
-    // Load Saved Key if exists
     std::ifstream keyFile(GetProgramDataPath());
     if (keyFile.is_open()) {
         std::getline(keyFile, g_LicenseKey);
@@ -199,7 +191,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 
     bool done = false;
-    float bg_anim = 0.0f;
 
     while (!done) {
         MSG msg;
@@ -214,17 +205,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        // Main UI Code
         ImGui::SetNextWindowPos(ImVec2(0, 0));
         ImGui::SetNextWindowSize(io.DisplaySize);
         ImGui::Begin("Chxl Main Engine", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-        // Sidebar / Header
         ImGui::TextColored(ImVec4(0.4f, 0.7f, 1.0f, 1.0f), "CHXL LAUNCHER ULTRA v2.0");
         ImGui::Separator();
 
         if (!g_IsAuthenticated) {
-            // Auth Screen UI
             ImGui::Spacing();
             ImGui::Text("Enter License Key:");
             static char keyInput[128] = "";
@@ -236,7 +224,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             }
             ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", g_KeyStatus.c_str());
         } else {
-            // Dashboard UI
             ImGui::BeginTabBar("MainTabs");
 
             if (ImGui::BeginTabItem("Multi-Instance Manager")) {
@@ -278,17 +265,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
         ImGui::End();
 
-        // Rendering Loop
         ImGui::Render();
         const float clear_color_with_alpha[4] = { 0.08f, 0.08f, 0.10f, 1.00f };
         g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, NULL);
         g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear_color_with_alpha);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
-        g_pSwapChain->Present(1, 0); // Smooth V-Sync
+        g_pSwapChain->Present(1, 0);
     }
 
-    // Cleanup
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
@@ -300,7 +285,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     return 0;
 }
 
-// DX11 Helper Functions
 bool CreateDeviceD3D(HWND hWnd) {
     DXGI_SWAP_CHAIN_DESC sd;
     ZeroMemory(&sd, sizeof(sd));
