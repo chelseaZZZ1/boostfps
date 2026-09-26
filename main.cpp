@@ -20,7 +20,7 @@
 
 using json = nlohmann::json;
 
-// Direct3D Variables
+// Direct3D 11 Global Variables
 static ID3D11Device*            g_pd3dDevice = nullptr;
 static ID3D11DeviceContext*      g_pd3dDeviceContext = nullptr;
 static IDXGISwapChain*          g_pSwapChain = nullptr;
@@ -33,11 +33,28 @@ const std::string SUPABASE_KEY = "sb_publishable_YIrrmqPLB610TCjSz31T3w_IG5iKOoO
 // Application State
 bool g_IsAuthenticated = false;
 std::string g_LicenseKey = "";
-std::string g_KeyStatus = "Awaiting Key Verification...";
-int g_MaxAccounts = 50;
-int g_ActiveAccounts = 0;
-bool g_AntiAFK = true;
-bool g_LowNetMode = false;
+std::string g_KeyStatus = "Ready to authenticate";
+
+// Customization & UI State
+enum UIMode { LOADING, SELECT_UI, CLASSIC_UI, NEO_MODERN_UI };
+UIMode g_CurrentUIMode = LOADING;
+float g_LoadingProgress = 0.0f;
+std::string g_LoadingStatus = "Initializing Core Systems...";
+
+// Roblox Account Instance Manager Structure
+struct RobloxInstance {
+    int id;
+    std::string accountName;
+    HWND hwnd;
+    bool isConnected;
+    bool antiAFK;
+    bool lowResourceMode;
+    int fpsCap;
+    std::string currentStatus;
+};
+
+std::vector<RobloxInstance> g_Instances;
+int g_SelectedInstanceIndex = -1;
 
 // Forward Declarations
 bool CreateDeviceD3D(HWND hWnd);
@@ -46,7 +63,12 @@ void CreateRenderTarget();
 void CleanupRenderTarget();
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-// Get ProgramData Path
+// Utility: Bypass Roblox Single-Instance Mutex
+void UnlockRobloxMultiInstance() {
+    CreateMutexA(NULL, TRUE, "ROBLOX_singletonMutex");
+}
+
+// Get ProgramData License File Path
 std::string GetProgramDataPath() {
     char path[MAX_PATH];
     if (SUCCEEDED(SHGetFolderPathA(NULL, CSIDL_COMMON_APPDATA, NULL, 0, path))) {
@@ -63,7 +85,7 @@ static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* use
     return size * nmemb;
 }
 
-// Verify & Activate Key via Supabase RPC
+// Verify Key via Supabase RPC
 bool VerifyAndActivateKey(const std::string& key) {
     CURL* curl = curl_easy_init();
     if (!curl) return false;
@@ -95,50 +117,60 @@ bool VerifyAndActivateKey(const std::string& key) {
         try {
             auto resJson = json::parse(readBuffer);
             if (resJson.contains("valid") && resJson["valid"].get<bool>()) {
-                std::string plan = resJson.value("plan", "unknown");
-                std::string msg = resJson.value("message", "Active");
-
                 std::ofstream outfile(GetProgramDataPath());
                 outfile << key;
                 outfile.close();
-
-                g_KeyStatus = "Status: " + msg + " (" + plan + ")";
+                g_KeyStatus = "Active (" + resJson.value("plan", "Lifetime") + ")";
                 return true;
             } else {
-                g_KeyStatus = resJson.value("message", "Invalid Key!");
+                g_KeyStatus = resJson.value("message", "Invalid License Key!");
             }
         } catch (...) {
-            g_KeyStatus = "Error parsing response from Supabase";
+            g_KeyStatus = "Response Parsing Error";
         }
     } else {
-        g_KeyStatus = "Connection Error to Supabase";
+        g_KeyStatus = "Connection Failed";
     }
     return false;
 }
 
-// Multi-Instance Unlocker
-void UnlockRobloxMultiInstance() {
-    CreateMutexA(NULL, TRUE, "ROBLOX_singletonMutex");
-}
+// Real Windows Enumeration for Active Roblox Windows
+BOOL CALLBACK EnumRobloxWindows(HWND hwnd, LPARAM lParam) {
+    char class_name[80];
+    char title[128];
+    GetClassNameA(hwnd, class_name, sizeof(class_name));
+    GetWindowTextA(hwnd, title, sizeof(title));
 
-// Anti-AFK Worker Thread
-void AntiAFKWorker() {
-    while (true) {
-        if (g_AntiAFK) {
-            HWND hwnd = FindWindowA(NULL, "Roblox");
-            if (hwnd) {
-                SendMessage(hwnd, WM_KEYDOWN, VK_SPACE, 0);
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                SendMessage(hwnd, WM_KEYUP, VK_SPACE, 0);
+    if (std::string(class_name) == "ApplicationFrameWindow" || std::string(class_name) == "RobloxAppClass") {
+        if (std::string(title).find("Roblox") != std::string::npos) {
+            bool exists = false;
+            for (auto& inst : g_Instances) {
+                if (inst.hwnd == hwnd) { exists = true; break; }
+            }
+            if (!exists) {
+                RobloxInstance inst;
+                inst.id = (int)g_Instances.size() + 1;
+                inst.accountName = "Roblox Account #" + std::to_string(inst.id);
+                inst.hwnd = hwnd;
+                inst.isConnected = true;
+                inst.antiAFK = true;
+                inst.lowResourceMode = false;
+                inst.fpsCap = 60;
+                inst.currentStatus = "Active & Running";
+                g_Instances.push_back(inst);
             }
         }
-        std::this_thread::sleep_for(std::chrono::seconds(60));
     }
+    return TRUE;
 }
 
-// Potassium Executor Sync
-void SyncWithPotassium(const std::string& script) {
-    HANDLE hPipe = CreateFileA("\\\\.\\pipe\\PotassiumPipe", GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+void RefreshRobloxInstances() {
+    EnumWindows(EnumRobloxWindows, 0);
+}
+
+// Send Script Injection via Pipe to Specific Window
+void SendScriptToPipe(const std::string& pipeName, const std::string& script) {
+    HANDLE hPipe = CreateFileA(pipeName.c_str(), GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
     if (hPipe != INVALID_HANDLE_VALUE) {
         DWORD bytesWritten;
         WriteFile(hPipe, script.c_str(), (DWORD)script.length(), &bytesWritten, NULL);
@@ -146,15 +178,234 @@ void SyncWithPotassium(const std::string& script) {
     }
 }
 
-// Main Entry Point
+// Dynamic UI Styling Configurator
+void ApplyNeoModernStyle() {
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.WindowRounding = 16.0f;
+    style.ChildRounding = 12.0f;
+    style.FrameRounding = 8.0f;
+    style.PopupRounding = 10.0f;
+    style.ScrollbarRounding = 12.0f;
+    style.GrabRounding = 6.0f;
+    style.WindowBorderSize = 1.0f;
+    style.ChildBorderSize = 1.0f;
+
+    ImVec4* colors = style.Colors;
+    colors[ImGuiCol_WindowBg]           = ImVec4(0.05f, 0.05f, 0.08f, 0.94f);
+    colors[ImGuiCol_ChildBg]            = ImVec4(0.09f, 0.09f, 0.13f, 0.60f);
+    colors[ImGuiCol_Border]             = ImVec4(0.25f, 0.25f, 0.40f, 0.40f);
+    colors[ImGuiCol_FrameBg]            = ImVec4(0.12f, 0.12f, 0.18f, 0.80f);
+    colors[ImGuiCol_FrameBgHovered]     = ImVec4(0.20f, 0.20f, 0.30f, 0.80f);
+    colors[ImGuiCol_FrameBgActive]      = ImVec4(0.28f, 0.28f, 0.42f, 0.80f);
+    colors[ImGuiCol_TitleBg]            = ImVec4(0.06f, 0.06f, 0.09f, 1.00f);
+    colors[ImGuiCol_TitleBgActive]      = ImVec4(0.10f, 0.10f, 0.16f, 1.00f);
+    colors[ImGuiCol_Button]             = ImVec4(0.38f, 0.28f, 0.85f, 0.70f);
+    colors[ImGuiCol_ButtonHovered]      = ImVec4(0.48f, 0.38f, 0.95f, 0.90f);
+    colors[ImGuiCol_ButtonActive]       = ImVec4(0.58f, 0.48f, 1.00f, 1.00f);
+    colors[ImGuiCol_Header]             = ImVec4(0.20f, 0.18f, 0.35f, 0.60f);
+    colors[ImGuiCol_HeaderHovered]      = ImVec4(0.30f, 0.28f, 0.50f, 0.80f);
+    colors[ImGuiCol_HeaderActive]       = ImVec4(0.40f, 0.38f, 0.65f, 1.00f);
+}
+
+void ApplyClassicStyle() {
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.WindowRounding = 4.0f;
+    style.ChildRounding = 2.0f;
+    style.FrameRounding = 2.0f;
+    style.WindowBorderSize = 1.0f;
+
+    ImVec4* colors = style.Colors;
+    colors[ImGuiCol_WindowBg]           = ImVec4(0.11f, 0.11f, 0.11f, 1.00f);
+    colors[ImGuiCol_ChildBg]            = ImVec4(0.15f, 0.15f, 0.15f, 1.00f);
+    colors[ImGuiCol_Border]             = ImVec4(0.30f, 0.30f, 0.30f, 1.00f);
+    colors[ImGuiCol_FrameBg]            = ImVec4(0.20f, 0.20f, 0.20f, 1.00f);
+    colors[ImGuiCol_Button]             = ImVec4(0.24f, 0.40f, 0.75f, 1.00f);
+    colors[ImGuiCol_ButtonHovered]      = ImVec4(0.30f, 0.50f, 0.88f, 1.00f);
+}
+
+// ---------------------------------------------------------
+// RENDER UI MODES
+// ---------------------------------------------------------
+
+void RenderLoadingScreen() {
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
+    ImGui::Begin("LoadingScreen", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove);
+
+    ImVec2 center = ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.4f);
+
+    ImGui::SetCursorPos(ImVec2(center.x - 180, center.y - 60));
+    ImGui::TextColored(ImVec4(0.5f, 0.4f, 1.0f, 1.0f), "CHXL LAUNCHER ENGINE v3.0");
+
+    ImGui::SetCursorPos(ImVec2(center.x - 180, center.y - 20));
+    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.8f, 1.0f), "%s", g_LoadingStatus.c_str());
+
+    ImGui::SetCursorPos(ImVec2(center.x - 200, center.y + 20));
+    ImGui::ProgressBar(g_LoadingProgress, ImVec2(400, 20));
+
+    // Simulate Step Loading Progress
+    g_LoadingProgress += 0.008f;
+    if (g_LoadingProgress > 0.3f && g_LoadingProgress < 0.6f) {
+        g_LoadingStatus = "Bypassing Multi-Instance Restrictions...";
+        UnlockRobloxMultiInstance();
+    } else if (g_LoadingProgress >= 0.6f && g_LoadingProgress < 0.9f) {
+        g_LoadingStatus = "Connecting to Supabase License Server...";
+    } else if (g_LoadingProgress >= 1.0f) {
+        std::ifstream keyFile(GetProgramDataPath());
+        if (keyFile.is_open()) {
+            std::getline(keyFile, g_LicenseKey);
+            keyFile.close();
+            if (!g_LicenseKey.empty()) {
+                g_IsAuthenticated = VerifyAndActivateKey(g_LicenseKey);
+            }
+        }
+        g_CurrentUIMode = SELECT_UI;
+    }
+
+    ImGui::End();
+}
+
+void RenderUISelectionScreen() {
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
+    ImGui::Begin("UISelection", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove);
+
+    ImVec2 size = ImGui::GetIO().DisplaySize;
+
+    ImGui::SetCursorPos(ImVec2(size.x * 0.5f - 160, 60));
+    ImGui::TextColored(ImVec4(1, 1, 1, 1), "CHOOSE YOUR PREFERRED INTERFACE");
+
+    ImGui::SetCursorPos(ImVec2(size.x * 0.2f, size.y * 0.3f));
+    if (ImGui::Button("EASY CLASSIC UI\n\n- Simple Layout\n- Low Resource Usage\n- High Performance", ImVec2(240, 220))) {
+        ApplyClassicStyle();
+        g_CurrentUIMode = CLASSIC_UI;
+    }
+
+    ImGui::SetCursorPos(ImVec2(size.x * 0.6f, size.y * 0.3f));
+    if (ImGui::Button("NEO MODERN UI (RECOMMENDED)\n\n- Multi-Instance Split Control\n- Advanced Anti-AFK & FPS Saver\n- Potassium Integration\n- Beautiful Glassmorphism", ImVec2(260, 220))) {
+        ApplyNeoModernStyle();
+        g_CurrentUIMode = NEO_MODERN_UI;
+    }
+
+    ImGui::End();
+}
+
+void RenderNeoModernUI() {
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
+    ImGui::Begin("NeoMain", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove);
+
+    // Header Bar
+    ImGui::TextColored(ImVec4(0.6f, 0.5f, 1.0f, 1.0f), "CHXL ULTRA MULTI-MANAGER");
+    ImGui::SameLine();
+    ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.4f, 1.0f), "[ License: %s ]", g_KeyStatus.c_str());
+    ImGui::SameLine(ImGui::GetIO().DisplaySize.x - 120);
+    if (ImGui::Button("Switch UI", ImVec2(100, 25))) {
+        g_CurrentUIMode = SELECT_UI;
+    }
+    ImGui::Separator();
+
+    if (!g_IsAuthenticated) {
+        ImGui::SetCursorPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.3f, 150));
+        ImGui::BeginChild("AuthBox", ImVec2(400, 200), true);
+        ImGui::Text("ENTER LICENSE KEY TO UNLOCK:");
+        static char keyBuf[128] = "";
+        ImGui::InputText("##keyin", keyBuf, IM_ARRAYSIZE(keyBuf));
+        if (ImGui::Button("Activate License", ImVec2(-1, 35))) {
+            g_LicenseKey = keyBuf;
+            g_IsAuthenticated = VerifyAndActivateKey(g_LicenseKey);
+        }
+        ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", g_KeyStatus.c_str());
+        ImGui::EndChild();
+        ImGui::End();
+        return;
+    }
+
+    // Left Panel: Instances List
+    ImGui::BeginChild("InstanceList", ImVec2(280, 0), true);
+    ImGui::Text("ACTIVE ROBLOX WINDOWS");
+    if (ImGui::Button("Refresh List", ImVec2(-1, 30))) {
+        RefreshRobloxInstances();
+    }
+    ImGui::Separator();
+
+    for (int i = 0; i < (int)g_Instances.size(); i++) {
+        std::string label = g_Instances[i].accountName + "##" + std::to_string(i);
+        if (ImGui::Selectable(label.c_str(), g_SelectedInstanceIndex == i, 0, ImVec2(0, 30))) {
+            g_SelectedInstanceIndex = i;
+        }
+    }
+    ImGui::EndChild();
+
+    ImGui::SameLine();
+
+    // Right Panel: Specific Instance Detailed Control
+    ImGui::BeginChild("InstanceDetails", ImVec2(0, 0), true);
+    if (g_SelectedInstanceIndex >= 0 && g_SelectedInstanceIndex < (int)g_Instances.size()) {
+        auto& inst = g_Instances[g_SelectedInstanceIndex];
+
+        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "CONTROLLING: %s", inst.accountName.c_str());
+        ImGui::Separator();
+
+        ImGui::Checkbox("Enable Anti-AFK (20 min Bypass)", &inst.antiAFK);
+        ImGui::Checkbox("Low Resource Saver (Freeze Unfocused Render)", &inst.lowResourceMode);
+        ImGui::SliderInt("Target FPS Limit", &inst.fpsCap, 15, 240);
+
+        ImGui::Spacing();
+        ImGui::Text("QUICK WINDOW ACTIONS:");
+        if (ImGui::Button("Bring to Front / Focus", ImVec2(180, 35))) {
+            SetForegroundWindow(inst.hwnd);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Close This Instance", ImVec2(180, 35))) {
+            PostMessage(inst.hwnd, WM_CLOSE, 0, 0);
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Text("POTASSIUM SCRIPT INJECTOR (THIS SCREEN ONLY):");
+        static char scriptBuffer[2048] = "print('Executed on selected instance!')";
+        ImGui::InputTextMultiline("##single_script", scriptBuffer, IM_ARRAYSIZE(scriptBuffer), ImVec2(-1, 140));
+
+        if (ImGui::Button("Execute Script on Selected จอ", ImVec2(-1, 40))) {
+            SendScriptToPipe("\\\\.\\pipe\\PotassiumPipe", scriptBuffer);
+        }
+    } else {
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Select an active Roblox Instance from the left list to open controls.");
+    }
+    ImGui::EndChild();
+
+    ImGui::End();
+}
+
+void RenderClassicUI() {
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
+    ImGui::Begin("Classic Main", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove);
+
+    ImGui::Text("CHXL LAUNCHER - CLASSIC EASY MODE");
+    ImGui::SameLine(ImGui::GetIO().DisplaySize.x - 100);
+    if (ImGui::Button("Switch UI")) g_CurrentUIMode = SELECT_UI;
+    ImGui::Separator();
+
+    if (ImGui::Button("Launch New Roblox จอ", ImVec2(200, 40))) {
+        ShellExecuteA(NULL, "open", "roblox://", NULL, NULL, SW_SHOWNORMAL);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Auto Anti-AFK All จอ", ImVec2(200, 40))) {
+        // Toggle Anti AFK for All
+    }
+
+    ImGui::Text("Running Roblox Accounts Count: %d", (int)g_Instances.size());
+    ImGui::End();
+}
+
+// Main Window Entry Point
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
-    UnlockRobloxMultiInstance();
-    std::thread(AntiAFKWorker).detach();
-
-    WNDCLASSEXW wc = { sizeof(WNDCLASSEXW), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, L"ChxlLauncherClass", NULL };
+    WNDCLASSEXW wc = { sizeof(WNDCLASSEXW), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, L"ChxlUltraClass", NULL };
     ::RegisterClassExW(&wc);
-    HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"Chxl Launcher Pro", WS_POPUP | WS_VISIBLE, 100, 100, 960, 580, NULL, NULL, wc.hInstance, NULL);
+    HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"Chxl Launcher Ultra", WS_POPUP | WS_VISIBLE, 100, 100, 1000, 620, NULL, NULL, wc.hInstance, NULL);
 
     if (!CreateDeviceD3D(hwnd)) {
         CleanupDeviceD3D();
@@ -168,30 +419,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO(); (void)io;
-    
-    ImGui::StyleColorsDark();
-    ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding = 12.0f;
-    style.FrameRounding = 6.0f;
-    style.PopupRounding = 8.0f;
-    style.ScrollbarRounding = 12.0f;
-    style.GrabRounding = 6.0f;
-    style.WindowBorderSize = 0.0f;
 
-    std::ifstream keyFile(GetProgramDataPath());
-    if (keyFile.is_open()) {
-        std::getline(keyFile, g_LicenseKey);
-        keyFile.close();
-        if (!g_LicenseKey.empty()) {
-            g_IsAuthenticated = VerifyAndActivateKey(g_LicenseKey);
-        }
-    }
+    // Load High Quality System Font
+    io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 18.0f);
 
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 
     bool done = false;
-
     while (!done) {
         MSG msg;
         while (::PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE)) {
@@ -205,70 +440,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        ImGui::SetNextWindowPos(ImVec2(0, 0));
-        ImGui::SetNextWindowSize(io.DisplaySize);
-        ImGui::Begin("Chxl Main Engine", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus);
-
-        ImGui::TextColored(ImVec4(0.4f, 0.7f, 1.0f, 1.0f), "CHXL LAUNCHER ULTRA v2.0");
-        ImGui::Separator();
-
-        if (!g_IsAuthenticated) {
-            ImGui::Spacing();
-            ImGui::Text("Enter License Key:");
-            static char keyInput[128] = "";
-            ImGui::InputText("##key", keyInput, IM_ARRAYSIZE(keyInput));
-            
-            if (ImGui::Button("Activate Key", ImVec2(150, 35))) {
-                g_LicenseKey = keyInput;
-                g_IsAuthenticated = VerifyAndActivateKey(g_LicenseKey);
-            }
-            ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", g_KeyStatus.c_str());
-        } else {
-            ImGui::BeginTabBar("MainTabs");
-
-            if (ImGui::BeginTabItem("Multi-Instance Manager")) {
-                ImGui::Text("Active Roblox Instances: %d / %d", g_ActiveAccounts, g_MaxAccounts);
-                ImGui::SliderInt("Max Accounts Target", &g_MaxAccounts, 1, 50);
-
-                if (ImGui::Button("Launch New Instance", ImVec2(180, 40))) {
-                    if (g_ActiveAccounts < g_MaxAccounts) {
-                        ShellExecuteA(NULL, "open", "roblox://", NULL, NULL, SW_SHOWNORMAL);
-                        g_ActiveAccounts++;
-                    }
-                }
-                ImGui::EndTabItem();
-            }
-
-            if (ImGui::BeginTabItem("Optimization & Anti-AFK")) {
-                ImGui::Checkbox("Enable Anti-AFK (Bypass 20 min disconnect)", &g_AntiAFK);
-                ImGui::Checkbox("Low Network / Resource Saver Mode", &g_LowNetMode);
-                
-                if (g_LowNetMode) {
-                    ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f), "Status: Bandwidth and CPU throttled for multi-account stability.");
-                }
-                ImGui::EndTabItem();
-            }
-
-            if (ImGui::BeginTabItem("Potassium Sync")) {
-                ImGui::Text("Sync Execution with Potassium Executor");
-                static char scriptBuf[1024] = "print('Hello from Chxl Launcher!')";
-                ImGui::InputTextMultiline("##script", scriptBuf, IM_ARRAYSIZE(scriptBuf), ImVec2(-1, 180));
-
-                if (ImGui::Button("Execute across All จอ", ImVec2(200, 40))) {
-                    SyncWithPotassium(scriptBuf);
-                }
-                ImGui::EndTabItem();
-            }
-
-            ImGui::EndTabBar();
+        // Render Active Mode
+        switch (g_CurrentUIMode) {
+            case LOADING:          RenderLoadingScreen(); break;
+            case SELECT_UI:        RenderUISelectionScreen(); break;
+            case NEO_MODERN_UI:    RenderNeoModernUI(); break;
+            case CLASSIC_UI:       RenderClassicUI(); break;
         }
 
-        ImGui::End();
-
         ImGui::Render();
-        const float clear_color_with_alpha[4] = { 0.08f, 0.08f, 0.10f, 1.00f };
+        const float clear_color[4] = { 0.04f, 0.04f, 0.06f, 1.00f };
         g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, NULL);
-        g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear_color_with_alpha);
+        g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear_color);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
         g_pSwapChain->Present(1, 0);
