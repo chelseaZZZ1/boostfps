@@ -5,6 +5,7 @@
 #include <windowsx.h>
 #include <d3d11.h>
 #include <tchar.h>
+#include <tlhelp32.h>
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -32,7 +33,7 @@ const std::string SUPABASE_URL = "https://ntaroifjesdztquwkzvt.supabase.co";
 const std::string SUPABASE_KEY = "sb_publishable_YIrrmqPLB610TCjSz31T3w_IG5iKOoO";
 
 // Application State
-bool g_IsAuthenticated = true; // Auto-Authenticated on local valid key
+bool g_IsAuthenticated = true; // Auto-Authenticated
 std::string g_LicenseKey = "";
 std::string g_KeyStatus = "Active (lifetime)";
 
@@ -45,6 +46,7 @@ std::string g_LoadingStatus = "Initializing Core Engines...";
 // Roblox Account Instance Manager Structure
 struct RobloxInstance {
     int id;
+    DWORD pid;
     std::string accountName;
     HWND hwnd;
     bool isConnected;
@@ -135,38 +137,79 @@ bool VerifyAndActivateKey(const std::string& key) {
     return false;
 }
 
-// Real Windows Enumeration for Active Roblox Windows
-BOOL CALLBACK EnumRobloxWindows(HWND hwnd, LPARAM lParam) {
-    char class_name[80];
-    char title[128];
-    GetClassNameA(hwnd, class_name, sizeof(class_name));
-    GetWindowTextA(hwnd, title, sizeof(title));
+// ---------------------------------------------------------
+// REAL ROBLOX PROCESS & WINDOW ENUMERATION SYSTEM
+// ---------------------------------------------------------
 
-    if (std::string(class_name) == "ApplicationFrameWindow" || std::string(class_name) == "RobloxAppClass") {
-        if (std::string(title).find("Roblox") != std::string::npos) {
-            bool exists = false;
-            for (auto& inst : g_Instances) {
-                if (inst.hwnd == hwnd) { exists = true; break; }
-            }
-            if (!exists) {
-                RobloxInstance inst;
-                inst.id = (int)g_Instances.size() + 1;
-                inst.accountName = "Roblox Account #" + std::to_string(inst.id);
-                inst.hwnd = hwnd;
-                inst.isConnected = true;
-                inst.antiAFK = true;
-                inst.lowResourceMode = false;
-                inst.fpsCap = 60;
-                inst.currentStatus = "Active & Running";
-                g_Instances.push_back(inst);
-            }
+struct EnumData {
+    DWORD processId;
+    HWND hWnd;
+};
+
+BOOL CALLBACK EnumProcForPID(HWND hwnd, LPARAM lParam) {
+    EnumData* data = (EnumData*)lParam;
+    DWORD processId = 0;
+    GetWindowThreadProcessId(hwnd, &processId);
+
+    if (processId == data->processId && IsWindowVisible(hwnd)) {
+        RECT rc;
+        GetWindowRect(hwnd, &rc);
+        // เลือกหน้าต่างหลักที่มีขนาดของจอเกมจริงๆ
+        if ((rc.right - rc.left) > 200 && (rc.bottom - rc.top) > 200) {
+            data->hWnd = hwnd;
+            return FALSE;
         }
     }
     return TRUE;
 }
 
+HWND GetHwndFromProcessId(DWORD pid) {
+    EnumData data = { pid, NULL };
+    EnumWindows(EnumProcForPID, (LPARAM)&data);
+    return data.hWnd;
+}
+
 void RefreshRobloxInstances() {
-    EnumWindows(EnumRobloxWindows, 0);
+    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnap == INVALID_HANDLE_VALUE) return;
+
+    PROCESSENTRY32W pe32;
+    pe32.dwSize = sizeof(PROCESSENTRY32W);
+
+    if (Process32FirstW(hSnap, &pe32)) {
+        do {
+            // ค้นหาจาก Process RobloxPlayerBeta.exe โดยตรง
+            if (_wcsicmp(pe32.szExeFile, L"RobloxPlayerBeta.exe") == 0) {
+                DWORD pid = pe32.th32ProcessID;
+                HWND hwnd = GetHwndFromProcessId(pid);
+
+                bool exists = false;
+                for (auto& inst : g_Instances) {
+                    if (inst.pid == pid) {
+                        exists = true;
+                        inst.hwnd = hwnd; // อัปเดต HWND
+                        break;
+                    }
+                }
+
+                if (!exists) {
+                    RobloxInstance inst;
+                    inst.id = (int)g_Instances.size() + 1;
+                    inst.pid = pid;
+                    inst.accountName = "Roblox Account (PID: " + std::to_string(pid) + ")";
+                    inst.hwnd = hwnd;
+                    inst.isConnected = true;
+                    inst.antiAFK = true;
+                    inst.lowResourceMode = false;
+                    inst.fpsCap = 60;
+                    inst.currentStatus = "Active & Running";
+                    g_Instances.push_back(inst);
+                }
+            }
+        } while (Process32NextW(hSnap, &pe32));
+    }
+    CloseHandle(hSnap);
+
     if (g_SelectedInstanceIndex == -1 && !g_Instances.empty()) {
         g_SelectedInstanceIndex = 0;
     }
@@ -234,7 +277,7 @@ void ApplyClassicStyle() {
 void RenderTopBar(HWND hwnd) {
     ImVec2 displaySize = ImGui::GetIO().DisplaySize;
     
-    // Top Custom Titlebar Drag Area
+    // Custom Titlebar Drag Area
     ImGui::SetCursorPos(ImVec2(0, 0));
     ImGui::InvisibleButton("##titlebardrag", ImVec2(displaySize.x - 90, 35));
     if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
@@ -243,7 +286,7 @@ void RenderTopBar(HWND hwnd) {
         SetWindowPos(hwnd, NULL, p.x - (int)displaySize.x / 2, p.y - 15, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
     }
 
-    // Top Right Window Controls (Minimize / Close)
+    // Window Controls (Minimize / Close)
     ImGui::SetCursorPos(ImVec2(displaySize.x - 85, 5));
     if (ImGui::Button("-", ImVec2(35, 25))) {
         ShowWindow(hwnd, SW_MINIMIZE);
@@ -263,7 +306,6 @@ void RenderLoadingScreen(HWND hwnd) {
 
     ImVec2 center = ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.45f);
 
-    // Smooth Alpha Animation Pulse
     static float timeAcc = 0.0f;
     timeAcc += ImGui::GetIO().DeltaTime * 3.0f;
     float pulseAlpha = (sinf(timeAcc) * 0.2f) + 0.8f;
@@ -274,7 +316,6 @@ void RenderLoadingScreen(HWND hwnd) {
     ImGui::SetCursorPos(ImVec2(center.x - 210, center.y - 25));
     ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.9f, 0.9f), "%s", g_LoadingStatus.c_str());
 
-    // Smooth Progress Animation
     ImGui::SetCursorPos(ImVec2(center.x - 220, center.y + 20));
     ImGui::ProgressBar(g_LoadingProgress, ImVec2(440, 22));
 
@@ -283,7 +324,8 @@ void RenderLoadingScreen(HWND hwnd) {
         g_LoadingStatus = "Unlocking Multi-Instance Restrictions...";
         UnlockRobloxMultiInstance();
     } else if (g_LoadingProgress >= 0.7f && g_LoadingProgress < 0.95f) {
-        g_LoadingStatus = "Authenticating with Supabase Server...";
+        g_LoadingStatus = "Scanning Active Roblox Processes...";
+        RefreshRobloxInstances();
     } else if (g_LoadingProgress >= 1.0f) {
         g_CurrentUIMode = SELECT_UI;
     }
@@ -354,11 +396,17 @@ void RenderNeoModernUI(HWND hwnd) {
     
     if (ImGui::Button("+ Launch New Roblox", ImVec2(-1, 32))) {
         ShellExecuteA(NULL, "open", "roblox://", NULL, NULL, SW_SHOWNORMAL);
+        // รอดาวน์โหลดและเปิดเกม 4 วินาทีแล้ว Refresh อัตโนมัติ
+        std::thread([]() {
+            std::this_thread::sleep_for(std::chrono::seconds(4));
+            RefreshRobloxInstances();
+        }).detach();
     }
 
     if (ImGui::Button("+ Add Virtual Test Instance", ImVec2(-1, 28))) {
         RobloxInstance inst;
         inst.id = (int)g_Instances.size() + 1;
+        inst.pid = 999000 + inst.id;
         inst.accountName = "Virtual Account #" + std::to_string(inst.id);
         inst.hwnd = NULL;
         inst.isConnected = true;
@@ -409,11 +457,18 @@ void RenderNeoModernUI(HWND hwnd) {
         ImGui::Text("WINDOW ACTIONS:");
         
         if (ImGui::Button("Bring Window To Front", ImVec2(200, 36))) {
-            if (inst.hwnd) SetForegroundWindow(inst.hwnd);
+            if (inst.hwnd) {
+                ShowWindow(inst.hwnd, SW_RESTORE);
+                SetForegroundWindow(inst.hwnd);
+            }
         }
         ImGui::SameLine();
         if (ImGui::Button("Close This Instance", ImVec2(200, 36))) {
             if (inst.hwnd) PostMessage(inst.hwnd, WM_CLOSE, 0, 0);
+            else if (inst.pid > 0) {
+                HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, inst.pid);
+                if (hProc) { TerminateProcess(hProc, 0); CloseHandle(hProc); }
+            }
             g_Instances.erase(g_Instances.begin() + g_SelectedInstanceIndex);
             g_SelectedInstanceIndex = g_Instances.empty() ? -1 : 0;
             ImGui::EndChild();
@@ -458,6 +513,10 @@ void RenderClassicUI(HWND hwnd) {
     ImGui::SetCursorPos(ImVec2(20, 60));
     if (ImGui::Button("Launch New Roblox จอ", ImVec2(220, 45))) {
         ShellExecuteA(NULL, "open", "roblox://", NULL, NULL, SW_SHOWNORMAL);
+        std::thread([]() {
+            std::this_thread::sleep_for(std::chrono::seconds(4));
+            RefreshRobloxInstances();
+        }).detach();
     }
     
     ImGui::SetCursorPos(ImVec2(20, 120));
@@ -472,7 +531,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     WNDCLASSEXW wc = { sizeof(WNDCLASSEXW), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, L"ChxlUltraClass", NULL };
     ::RegisterClassExW(&wc);
     
-    // WS_POPUP with THICKFRAME to allow native resize border without standard titlebar
+    // WS_THICKFRAME สำหรับให้ผู้ใช้ขยายหน้าต่างได้อิสระ
     HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"Chxl Launcher Ultra", WS_POPUP | WS_THICKFRAME | WS_VISIBLE, 100, 100, 1000, 620, NULL, NULL, wc.hInstance, NULL);
 
     if (!CreateDeviceD3D(hwnd)) {
@@ -488,7 +547,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO(); (void)io;
 
-    // Load High Quality System Font
     io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 18.0f);
 
     ImGui_ImplWin32_Init(hwnd);
@@ -508,7 +566,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        // Render Active Mode
+        // Render Active UI Mode
         switch (g_CurrentUIMode) {
             case LOADING:          RenderLoadingScreen(hwnd); break;
             case SELECT_UI:        RenderUISelectionScreen(hwnd); break;
@@ -583,7 +641,7 @@ void CleanupRenderTarget() {
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-// Windows Procedure Callback for Native Resizing & Borderless Control
+// Native Resizing & Borderless Control Proc
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam)) return true;
 
