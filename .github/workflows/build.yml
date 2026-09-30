@@ -1,36 +1,34 @@
-name: Build Chxl Launcher
+name: Build FPS Booster Executable
 
 on:
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "master" ]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: windows-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout Repository
+      uses: actions/checkout@v4
 
-    - name: Integrate vcpkg
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install Dependencies
       run: |
-        vcpkg integrate install
+        python -m pip install --upgrade pip
+        pip install pyinstaller
 
-    - name: Install Dependencies (vcpkg Static)
+    - name: Compile Python to EXE
       run: |
-        vcpkg install imgui[dx11-binding,win32-binding]:x64-windows-static nlohmann-json:x64-windows-static curl:x64-windows-static
+        pyinstaller --onefile --uac-admin --name="FiveM_FPS_Booster" boost_fps.py
 
-    - name: Configure CMake
-      run: |
-        cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows-static -A x64
-
-    - name: Build
-      run: |
-        cmake --build build --config Release
-
-    - name: Upload Executable Artifact
+    - name: Upload Artifact (Executable)
       uses: actions/upload-artifact@v4
       with:
-        name: ChxlLauncher-Release
-        path: build/Release/ChxlLauncher.exe
+        name: FiveM_FPS_Booster_EXE
+        path: dist/FiveM_FPS_Booster.exe
