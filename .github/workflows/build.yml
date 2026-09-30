@@ -25,7 +25,7 @@ jobs:
 
     - name: Compile Python to EXE
       run: |
-        pyinstaller --onefile --uac-admin --name="FiveM_FPS_Booster" boost_fps.py
+        pyinstaller --onefile --uac-admin --name="FiveM_FPS_Booster" main.py
 
     - name: Upload Artifact (Executable)
       uses: actions/upload-artifact@v4
